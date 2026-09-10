@@ -1,8 +1,18 @@
 from fastapi import FastAPI, UploadFile, File
 from services.model_service import predict
 from services.file_service import validate_video, save_video
+from services.nlp_service import process_signs
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/")
@@ -37,4 +47,10 @@ async def predict_video(file: UploadFile = File(...)):
 
     result = predict(file_path)
 
-    return result
+    sentence = process_signs([result["sign"]])
+
+    return {
+        "sign": result["sign"],
+        "confidence": result["confidence"],
+        "sentence": sentence
+    }
