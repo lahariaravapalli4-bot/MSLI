@@ -1,0 +1,7 @@
+*.zip
+*.parquet
+*.npy
+*.mp4
+venv/
+model/data/
+model/checkpoints/*.keras
