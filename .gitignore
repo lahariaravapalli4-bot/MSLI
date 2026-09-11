@@ -5,3 +5,5 @@
 venv/
 model/data/
 model/checkpoints/*.keras
+__pycache__/
+*.pyc
