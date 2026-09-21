@@ -1,15 +1,47 @@
 import os
 import json
 import numpy as np
-import tensorflow as tf
-from model.src.extract_landmarks import extract_landmarks_from_video
+import keras
+from keras import initializers
+from keras.layers import Layer
 
-# Resolve file paths relative to this file's directory
+# --- Universal Deserialization Patch ---
+# Intercept configs at the base level before __init__ is called
+_orig_layer_from_config = Layer.from_config
+_unsupported_layer_keys = {
+    "quantization_config",
+    "renorm",
+    "renorm_clipping",
+    "renorm_momentum",
+    "synchronized",
+}
+
+@classmethod
+def _safe_layer_from_config(cls, config):
+    config = config.copy()
+    for key in _unsupported_layer_keys:
+        config.pop(key, None)
+    return _orig_layer_from_config.__func__(cls, config)
+
+Layer.from_config = _safe_layer_from_config
+
+_orig_init_from_config = initializers.Initializer.from_config
+_unsupported_init_keys = {"input_axes", "output_axes"}
+
+@classmethod
+def _safe_init_from_config(cls, config):
+    config = config.copy()
+    for key in _unsupported_init_keys:
+        config.pop(key, None)
+    return _orig_init_from_config.__func__(cls, config)
+
+initializers.Initializer.from_config = _safe_init_from_config
+# ---------------------------------------
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, "checkpoints", "isl_model_best.keras")
 CLASS_MAP_PATH = os.path.join(BASE_DIR, "checkpoints", "class_map.json")
 
-# Global variables to cache loaded model and labels in memory
 _MODEL = None
 _CLASS_MAP = None
 
@@ -23,7 +55,7 @@ def _load_artifacts():
                 f"Model checkpoint not found at: {MODEL_PATH}. "
                 "Ensure trained weights are placed in model/checkpoints/."
             )
-        _MODEL = tf.keras.models.load_model(MODEL_PATH)
+        _MODEL = keras.models.load_model(MODEL_PATH, compile=False)
 
     if _CLASS_MAP is None:
         if not os.path.exists(CLASS_MAP_PATH):
@@ -33,52 +65,27 @@ def _load_artifacts():
             )
         with open(CLASS_MAP_PATH, "r", encoding="utf-8") as f:
             raw_map = json.load(f)
-            # Ensure keys are integers (class indices)
             _CLASS_MAP = {int(k): v for k, v in raw_map.items()}
 
 
-def predict(video_path: str) -> dict:
+def predict(sequence: np.ndarray) -> dict:
     """
-    Public entrypoint for backend integration.
-    
-    Args:
-        video_path (str): File path to an MP4 video clip.
-        
-    Returns:
-        dict: {"sign": str, "confidence": float}
+    Runs model inference on a preprocessed landmark sequence.
+    Input sequence shape: (32, 225) or (1, 32, 225)
     """
-    if not os.path.exists(video_path):
-        raise FileNotFoundError(f"Video file does not exist: {video_path}")
-
     _load_artifacts()
 
-    # 1. Extract (32, 225) landmarks using MediaPipe Holistic
-    features = extract_landmarks_from_video(video_path, target_frames=32)
+    if sequence.ndim == 2:
+        sequence = np.expand_dims(sequence, axis=0)
 
-    # 2. Add batch dimension -> shape: (1, 32, 225)
-    input_tensor = np.expand_dims(features, axis=0)
-
-    # 3. Model inference
-    probabilities = _MODEL.predict(input_tensor, verbose=0)[0]
-    best_idx = int(np.argmax(probabilities))
-    confidence = float(probabilities[best_idx])
-    predicted_sign = _CLASS_MAP.get(best_idx, "UNKNOWN")
+    predictions = _MODEL.predict(sequence, verbose=0)
+    class_idx = int(np.argmax(predictions, axis=-1)[0])
+    confidence = float(np.max(predictions, axis=-1)[0])
+    predicted_sign = _CLASS_MAP.get(class_idx, "UNKNOWN")
 
     return {
+        "success": True,
         "sign": predicted_sign,
-        "confidence": round(confidence, 4)
+        "confidence": confidence,
+        "error": None
     }
-
-
-if __name__ == "__main__":
-    import sys
-    if len(sys.argv) > 1:
-        test_clip = sys.argv[1]
-        print(f"Testing inference on {test_clip}...")
-        try:
-            res = predict(test_clip)
-            print("Result:", res)
-        except Exception as e:
-            print("Inference error:", e)
-    else:
-        print("predict.py loaded successfully. Run with a video path argument to test.")
