@@ -3,12 +3,58 @@ import mediapipe as mp
 import numpy as np
 
 mp_holistic = mp.solutions.holistic
+NUM_FEATURES = 225  # 21 Left Hand (63) + 21 Right Hand (63) + 33 Pose (99)
+
+
+def normalize_frame_coordinates(coords: np.ndarray) -> np.ndarray:
+    """
+    Applies torso-relative spatial translation and distance scaling.
+    Matches the normalization logic in train.py exactly.
+    
+    coords: 1D array of 225 floats representing (x, y, z):
+      - indices 0..62:   Left Hand (21 keypoints * 3)
+      - indices 63..125:  Right Hand (21 keypoints * 3)
+      - indices 126..224: Upper Pose (33 keypoints * 3)
+    """
+    # Keypoint 11 (Left Shoulder) in pose slice: offset = 126 + (11 * 3) = 159
+    ls_x = coords[159]
+    ls_y = coords[160]
+
+    # Keypoint 12 (Right Shoulder) in pose slice: offset = 126 + (12 * 3) = 162
+    rs_x = coords[162]
+    rs_y = coords[163]
+
+    # If shoulders are detected, anchor to shoulder center
+    if (ls_x != 0.0 or ls_y != 0.0) and (rs_x != 0.0 or rs_y != 0.0):
+        anchor_x = (ls_x + rs_x) / 2.0
+        anchor_y = (ls_y + rs_y) / 2.0
+        torso_scale = np.sqrt((ls_x - rs_x) ** 2 + (ls_y - rs_y) ** 2)
+        if torso_scale < 1e-4:
+            torso_scale = 1.0
+    else:
+        # Fallback if pose tracking dropped shoulders in that specific frame
+        anchor_x = 0.5
+        anchor_y = 0.5
+        torso_scale = 1.0
+
+    normalized = coords.copy()
+
+    # Shift (x, y) relative to torso anchor and scale by body size
+    for i in range(0, NUM_FEATURES, 3):
+        # Keep empty/missing joints at exact 0.0
+        if coords[i] != 0.0 or coords[i + 1] != 0.0:
+            normalized[i] = (coords[i] - anchor_x) / torso_scale
+            normalized[i + 1] = (coords[i + 1] - anchor_y) / torso_scale
+            # z coordinate remains as relative depth
+
+    return normalized
+
 
 def extract_landmarks_from_video(video_path: str, target_frames: int = 32) -> np.ndarray:
     """
     Processes an MP4 video clip, extracts Left Hand (21), Right Hand (21),
-    and Pose (33) landmarks using MediaPipe Holistic, and resamples the 
-    resulting sequence to target_frames (shape: [target_frames, 225]).
+    and Pose (33) landmarks using MediaPipe Holistic, applies torso-anchor
+    normalization, and standardizes the sequence to target_frames (shape: [target_frames, 225]).
     """
     cap = cv2.VideoCapture(video_path)
     frames_landmarks = []
@@ -47,15 +93,18 @@ def extract_landmarks_from_video(video_path: str, target_frames: int = 32) -> np
             else:
                 pose = np.zeros(99, dtype=np.float32)
 
-            # Concatenate to form a 225-element vector for this frame
-            frame_features = np.concatenate([lh, rh, pose])
-            frames_landmarks.append(frame_features)
+            # Concatenate to form raw 225-element vector
+            raw_frame_features = np.concatenate([lh, rh, pose])
+
+            # Apply identical torso normalization
+            norm_frame_features = normalize_frame_coordinates(raw_frame_features)
+            frames_landmarks.append(norm_frame_features)
 
     cap.release()
 
     # Handle empty or unreadable video
     if len(frames_landmarks) == 0:
-        return np.zeros((target_frames, 225), dtype=np.float32)
+        return np.zeros((target_frames, NUM_FEATURES), dtype=np.float32)
 
     seq = np.array(frames_landmarks, dtype=np.float32)
     n_frames = len(seq)
