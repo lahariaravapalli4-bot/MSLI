@@ -68,24 +68,61 @@ def _load_artifacts():
             _CLASS_MAP = {int(k): v for k, v in raw_map.items()}
 
 
-def predict(sequence: np.ndarray) -> dict:
+def predict(input_data, flip_horizontal: bool = False, top_k: int = 5) -> dict:
     """
-    Runs model inference on a preprocessed landmark sequence.
-    Input sequence shape: (32, 225) or (1, 32, 225)
+    Runs model inference.
+    Accepts either:
+      - np.ndarray of shape (32, 225) or (1, 32, 225)
+      - str: path to an MP4 video clip (extracts landmarks automatically)
     """
     _load_artifacts()
 
+    # If input is a file path string, extract landmarks first
+    if isinstance(input_data, str):
+        if not os.path.exists(input_data):
+            return {
+                "success": False,
+                "sign": "",
+                "confidence": 0.0,
+                "top_predictions": [],
+                "error": f"Video file not found at: {input_data}"
+            }
+        from model.src.extract_landmarks import extract_landmarks_from_video
+        sequence = extract_landmarks_from_video(input_data, flip_horizontal=flip_horizontal)
+    else:
+        sequence = input_data
+
+    # Validate sequence type
+    if not isinstance(sequence, np.ndarray):
+        return {
+            "success": False,
+            "sign": "",
+            "confidence": 0.0,
+            "top_predictions": [],
+            "error": f"Expected numpy array for sequence, got {type(sequence).__name__}"
+        }
+
+    # Expand dims if single sequence without batch dimension
     if sequence.ndim == 2:
         sequence = np.expand_dims(sequence, axis=0)
 
-    predictions = _MODEL.predict(sequence, verbose=0)
-    class_idx = int(np.argmax(predictions, axis=-1)[0])
-    confidence = float(np.max(predictions, axis=-1)[0])
-    predicted_sign = _CLASS_MAP.get(class_idx, "UNKNOWN")
+    predictions = _MODEL.predict(sequence, verbose=0)[0]
+    
+    # Sort probabilities in descending order
+    top_indices = np.argsort(predictions)[-top_k:][::-1]
+    top_predictions = [
+        {"sign": _CLASS_MAP.get(int(i), "UNKNOWN"), "confidence": float(predictions[i])}
+        for i in top_indices
+    ]
+
+    best_idx = int(top_indices[0])
+    best_confidence = float(predictions[best_idx])
+    predicted_sign = _CLASS_MAP.get(best_idx, "UNKNOWN")
 
     return {
         "success": True,
         "sign": predicted_sign,
-        "confidence": confidence,
+        "confidence": best_confidence,
+        "top_predictions": top_predictions,
         "error": None
     }
