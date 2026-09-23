@@ -10,6 +10,8 @@ function App() {
   const [cameraOn, setCameraOn] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recordedVideo, setRecordedVideo] = useState(null);
+  const [prediction, setPrediction] = useState(null);
+  const [loading, setLoading] = useState(false);
 
   // Start camera
   const startCamera = async () => {
@@ -77,6 +79,36 @@ function App() {
   // Record again
   const recordAgain = () => {
     deleteRecording();
+    const predictVideo = async () => {
+  if (!recordedVideo) return;
+
+  setLoading(true);
+
+  try {
+    const response = await fetch(recordedVideo);
+    const blob = await response.blob();
+
+    const formData = new FormData();
+    formData.append("file", blob, "recording.webm");
+
+    const result = await fetch("http://127.0.0.1:8000/predict", {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!result.ok) {
+      throw new Error("Prediction failed");
+    }
+
+    const data = await result.json();
+    setPrediction(data);
+  } catch (error) {
+    console.error(error);
+    alert("Could not connect to the backend.");
+  } finally {
+    setLoading(false);
+  }
+};
 
     if (streamRef.current) {
       startRecording();
@@ -216,7 +248,7 @@ function App() {
 
               <div className="result-box">
                 <span className="placeholder">
-                  Recognized words will appear here
+                  Generated sentence will appear here
                 </span>
               </div>
             </div>
@@ -285,6 +317,14 @@ function App() {
                   onClick={recordAgain}
                 >
                   Record Again
+                </button>
+
+                <button
+                  className="btn primary"
+                  onClick={predictVideo}
+                  disabled={loading}
+                >
+                  {loading ? "Recognizing..." : "Recognize Sign"}
                 </button>
 
               </div>
