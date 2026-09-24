@@ -85,10 +85,9 @@ def extract_landmarks_from_video(
     if len(frames_landmarks) == 0:
         return np.zeros((target_frames, NUM_FEATURES), dtype=np.float32)
 
-    # Convert once
     seq = np.array(frames_landmarks, dtype=np.float32)
 
-    # Backfill initial zero frames
+    # 1. Backfill initial zero frames if detection lagged
     for col_slice in [slice(0, 63), slice(63, 162), slice(162, 225)]:
         sub = seq[:, col_slice]
         non_zero_indices = np.where(np.any(sub != 0.0, axis=1))[0]
@@ -99,7 +98,23 @@ def extract_landmarks_from_video(
                 for i in range(first_valid_idx):
                     seq[i, col_slice] = first_valid_frame
 
-    # Resample or pad to target frame count
+    # 2. Activity Trimming: Locate the active motion segment
+    # Compute velocity across consecutive frames using hand coordinates (LH: 0..63, RH: 162..225)
+    hand_coords = np.concatenate([seq[:, :63], seq[:, 162:]], axis=1)
+    if len(hand_coords) > 1:
+        motion_energy = np.linalg.norm(np.diff(hand_coords, axis=0), axis=1)
+        
+        # Identify frames where motion exceeds 15% of the peak movement
+        threshold = np.max(motion_energy) * 0.15
+        active_indices = np.where(motion_energy > threshold)[0]
+        
+        if len(active_indices) >= 8:
+            # Add a 4-frame buffer before and after the gesture
+            start_f = max(0, active_indices[0] - 4)
+            end_f = min(len(seq), active_indices[-1] + 5)
+            seq = seq[start_f:end_f]
+
+    # 3. Resample or pad strictly over the active segment
     n_frames = len(seq)
     if n_frames == target_frames:
         return seq
