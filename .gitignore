@@ -7,3 +7,10 @@ model/data/
 model/checkpoints/*.keras
 __pycache__/
 *.pyc
+
+venv/
+__pycache__/
+*.zip
+*.npz
+model/data/
+
